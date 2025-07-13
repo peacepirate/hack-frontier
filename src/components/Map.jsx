@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { MapContainer, TileLayer, GeoJSON, Marker, Popup, Circle } from 'react-leaflet'
+import React, { useState, useEffect, useRef } from 'react'
+import { MapContainer, TileLayer, GeoJSON, Marker, Popup, Circle, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { getColorByGapScore, getColorByPovertyRate } from '../utils/dataLoader'
 
@@ -73,6 +73,15 @@ const transitIcon = new L.Icon({
   shadowSize: [16, 16]
 })
 
+const userLocationIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-gold.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+})
+
 // Function to categorize services based on name and description
 const categorizeService = (service) => {
   const serviceName = service.service_name?.toLowerCase() || ''
@@ -106,6 +115,22 @@ const categorizeService = (service) => {
   return 'Other'
 }
 
+// Component to handle map updates from inside MapContainer
+const MapController = ({ center, zoom }) => {
+  const map = useMap()
+  
+  useEffect(() => {
+    if (center && zoom) {
+      map.flyTo(center, zoom, {
+        animate: true,
+        duration: 1.5
+      })
+    }
+  }, [center, zoom, map])
+  
+  return null
+}
+
 const Map = ({ 
   data, 
   mapMode = 'serviceGaps',
@@ -114,9 +139,13 @@ const Map = ({
   transitRadius = 0.5
 }) => {
   const [selectedFeature, setSelectedFeature] = useState(null)
+  const [userLocation, setUserLocation] = useState(null)
+  const [isLocating, setIsLocating] = useState(false)
+  const [locationError, setLocationError] = useState(null)
+  const [flyToLocation, setFlyToLocation] = useState(null)
 
-  const center = [32.7157, -117.1611] // San Diego center
-  const zoom = 10
+  const defaultCenter = [32.7157, -117.1611] // San Diego center
+  const defaultZoom = 10
 
   const getFeatureStyle = (feature) => {
     const props = feature.properties
@@ -205,6 +234,57 @@ const Map = ({
     layer.bindPopup(popupContent)
   }
 
+  const getCurrentLocation = () => {
+    setIsLocating(true)
+    setLocationError(null)
+    
+    if (!navigator.geolocation) {
+      setLocationError('Geolocation is not supported by this browser')
+      setIsLocating(false)
+      return
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords
+        const newLocation = [latitude, longitude]
+        setUserLocation(newLocation)
+        setFlyToLocation({ center: newLocation, zoom: 14 })
+        setIsLocating(false)
+      },
+      (error) => {
+        let errorMessage = 'Unable to retrieve your location'
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage = 'Location access denied by user'
+            break
+          case error.POSITION_UNAVAILABLE:
+            errorMessage = 'Location information is unavailable'
+            break
+          case error.TIMEOUT:
+            errorMessage = 'Location request timed out'
+            break
+          default:
+            errorMessage = 'An unknown error occurred'
+            break
+        }
+        setLocationError(errorMessage)
+        setIsLocating(false)
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 300000 // 5 minutes
+      }
+    )
+  }
+
+  const resetToSanDiego = () => {
+    setUserLocation(null)
+    setLocationError(null)
+    setFlyToLocation({ center: defaultCenter, zoom: defaultZoom })
+  }
+
   if (!data.processedZipCodes) {
     return (
       <div className="loading">
@@ -214,12 +294,86 @@ const Map = ({
   }
 
   return (
-    <MapContainer 
-      center={center} 
-      zoom={zoom} 
-      style={{ height: '100%', width: '100%' }}
-      zoomControl={true}
-    >
+    <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+      {/* Location Controls */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        zIndex: 1000,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '5px'
+      }}>
+        <button
+          onClick={getCurrentLocation}
+          disabled={isLocating}
+          style={{
+            padding: '8px 12px',
+            backgroundColor: isLocating ? '#ccc' : '#667eea',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: isLocating ? 'not-allowed' : 'pointer',
+            fontSize: '12px',
+            fontWeight: '500',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+        >
+          {isLocating ? '📍 Locating...' : '📍 My Location'}
+        </button>
+        
+        {userLocation && (
+          <button
+            onClick={resetToSanDiego}
+            style={{
+              padding: '8px 12px',
+              backgroundColor: '#28a745',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '500',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+          >
+            🏠 Reset View
+          </button>
+        )}
+        
+        {locationError && (
+          <div style={{
+            padding: '6px 8px',
+            backgroundColor: '#dc3545',
+            color: 'white',
+            borderRadius: '4px',
+            fontSize: '11px',
+            maxWidth: '150px',
+            wordWrap: 'break-word'
+          }}>
+            {locationError}
+          </div>
+        )}
+      </div>
+
+      <MapContainer 
+        center={defaultCenter} 
+        zoom={defaultZoom} 
+        style={{ height: '100%', width: '100%' }}
+        zoomControl={true}
+      >
+        {/* Map Controller for flying to user location */}
+        <MapController 
+          center={flyToLocation?.center} 
+          zoom={flyToLocation?.zoom} 
+        />
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -296,7 +450,23 @@ const Map = ({
           )}
         </React.Fragment>
       ))}
+
+      {/* User Location Marker */}
+      {userLocation && (
+        <Marker
+          position={userLocation}
+          icon={userLocationIcon}
+        >
+          <Popup>
+            <div>
+              <h4>📍 Your Location</h4>
+              <p><strong>Coordinates:</strong> {userLocation[0].toFixed(4)}, {userLocation[1].toFixed(4)}</p>
+            </div>
+          </Popup>
+        </Marker>
+      )}
     </MapContainer>
+    </div>
   )
 }
 
